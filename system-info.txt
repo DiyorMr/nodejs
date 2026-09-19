@@ -1,6 +1,0 @@
-
-Platforma: win32
-Arxitektura: x64
-Papka: C:\Users\jiyan\OneDrive\Desktop\backend
-Fayl nomi: app.js
-Xotira: 15.77 GB
