@@ -1,61 +1,118 @@
-// Express — server (backend) yaratish uchun kutubxona
+// Mini Products API - Error Handling bilan
+// ES Module versiyasi (package.json da "type": "module" bo'lsa)
+// Ishga tushirish: npm i express && node server.js  (Node 18+)
+
 import express from "express";
-// CORS — boshqa manzil/portdan (masalan localhost:5500) kelgan so'rovlarga ruxsat berish uchun
-import cors from "cors";
-
-// Express ilovasini (serverni) yaratamiz
 const app = express();
-
-// CORS middleware — brauzerning "boshqa domendan so'rov taqiqlangan" xatosini oldini oladi
-app.use(cors());
-
-// Kelgan so'rov tanasini (body) avtomatik JSON qilib o'qiydi.
-// Shu qator bo'lmasa, req.body har doim undefined bo'ladi.
 app.use(express.json());
 
-// "Ma'lumotlar bazasi" o'rniga vaqtinchalik massiv (RAM'da saqlanadi,
-// server qayta ishga tushsa, o'zgartirishlar yo'qoladi)
-let users = ["Ali", "Vali", "Aziza"];
+// ---------- Custom xato klassi ----------
+class AppError extends Error {
+    constructor(message, statusCode) {
+        super(message);
+        this.statusCode = statusCode;
+    }
+}
 
-// ✅ GET /users — Vazifasi: mavjud foydalanuvchilar ro'yxatini brauzerga qaytarish.
-// Bu so'rov ma'lumot o'zgartirmaydi, faqat o'qiydi.
-app.get("/users", (req, res) => {
-    res.send(users); // users massivini JSON ko'rinishida javob sifatida yuboradi
+// ---------- Ma'lumotlar (xotirada) ----------
+let products = [
+    { id: 1, name: "Olma", price: 12000 },
+    { id: 2, name: "Non", price: 5000 },
+    { id: 3, name: "Sut", price: 11000 },
+];
+let nextId = 4;
+
+// async xatolarni error middleware'ga uzatish uchun yordamchi
+const asyncHandler = (fn) => (req, res, next) =>
+    Promise.resolve(fn(req, res, next)).catch(next);
+
+// ---------- 1. GET /products -> 200 ----------
+app.get("/products", (req, res) => {
+    res.status(200).json(products);
 });
 
-// ✅ POST /users — Vazifasi: yangi foydalanuvchi nomini qabul qilib, ro'yxatga qo'shish.
-app.post("/users", (req, res) => {  
-    try {
-        // Kelgan JSON body'dan faqat "name" maydonini ajratib olamiz
-        const { name } = req.body;
+// ---------- 2. GET /products/:id -> 404 ----------
+app.get("/products/:id", (req, res, next) => {
+    const product = products.find((p) => p.id === Number(req.params.id));
+    if (!product) {
+        return next(new AppError("Product topilmadi", 404));
+    }
+    res.status(200).json(product);
+});
 
-        // Validatsiya: agar "name" yuborilmagan yoki bo'sh bo'lsa
-        if (!name) {
-            // 400 = Bad Request (mijoz noto'g'ri/yetarli bo'lmagan ma'lumot yuborgan)
-            return res.status(400).json({ message: "Ism yuborilmadi!" });
-            // "return" — funksiyani shu yerda to'xtatadi, pastdagi kod ishlamaydi
+// ---------- 3. POST /products -> 400 ----------
+app.post("/products", (req, res, next) => {
+    const { name, price } = req.body;
+    if (!name) {
+        return next(new AppError("name maydoni majburiy", 400));
+    }
+    const product = { id: nextId++, name, price: price ?? 0 };
+    products.push(product);
+    res.status(201).json(product);
+});
+
+// ---------- 4. DELETE /products/:id -> 204 ----------
+app.delete("/products/:id", (req, res, next) => {
+    const index = products.findIndex((p) => p.id === Number(req.params.id));
+    if (index === -1) {
+        return next(new AppError("Product topilmadi", 404));
+    }
+    products.splice(index, 1);
+    res.status(204).send();
+});
+
+// ---------- 5. Weather API -> URL noto'g'ri bo'lsa 503 ----------
+// To'g'ri URL:  GET /weather
+// Noto'g'ri URL (test uchun): GET /weather?broken=true
+app.get(
+    "/weather",
+    asyncHandler(async (req, res) => {
+        const url =
+            req.query.broken === "true"
+                ? "https://noto-gri-url.example.invalid/weather"
+                : "https://api.open-meteo.com/v1/forecast?latitude=41.31&longitude=69.28&current_weather=true";
+
+        let response;
+        try {
+            response = await fetch(url);
+        } catch (err) {
+            // tarmoq xatosi / URL noto'g'ri
+            throw new AppError("Weather xizmati hozircha mavjud emas", 503);
         }
 
-        // Yangi ismni massivga qo'shamiz
-        users.push(name);
+        if (!response.ok) {
+            throw new AppError("Weather xizmati hozircha mavjud emas", 503);
+        }
 
-        // 201 = Created (yangi resurs muvaffaqiyatli yaratildi)
-        res.status(201).json({
-            message: `✅ Yangi foydalanuvchi qo'shildi: ${name}`,
-            allUsers: users, // yangilangan to'liq ro'yxatni ham qaytaramiz
-        });
-    } catch (error) {
-        // Agar try{} ichida kutilmagan xatolik yuz bersa (masalan server ichki xatosi),
-        // dastur "crash" bo'lib to'xtab qolmasligi uchun shu yerda ushlab olinadi
-        console.error(error); // xatolikni terminalda ko'rish uchun
-        res.status(500).json({ message: "Xatolik yuz berdi" }); // 500 = Internal Server Error
-    }
+        const data = await response.json();
+        res.status(200).json(data);
+    })
+);
+
+// ---------- Mavjud bo'lmagan route -> 404 ----------
+app.use((req, res, next) => {
+    next(new AppError(`Route topilmadi: ${req.method} ${req.originalUrl}`, 404));
 });
 
-// Server ishlaydigan port raqami
+// ---------- Custom error middleware ----------
+// (4 ta parametr bo'lishi shart!)
+app.use((err, req, res, next) => {
+    const statusCode = err.statusCode || 500;
+
+    // Console'ga log
+    console.error(
+        `[${new Date().toISOString()}] ${req.method} ${req.originalUrl} -> ${statusCode}: ${err.message}`
+    );
+
+    // Toza formatda javob
+    res.status(statusCode).json({
+        success: false,
+        error: {
+            status: statusCode,
+            message: statusCode === 500 ? "Ichki server xatosi" : err.message,
+        },
+    });
+});
+
 const PORT = 3000;
-
-// Serverni shu portda tinglashga (ishga tushirishga) buyuramiz
-app.listen(PORT, () => {
-    console.log(`🚀 Server ishga tushdi: http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server http://localhost:${PORT} da ishlayapti`));
